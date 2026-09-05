@@ -12,36 +12,50 @@ import (
 // engine behind `terfyn fmt`; parse -> Print -> parse -> Print is stable
 // (idempotent) for any file that parses without error.
 func Print(f *File) string {
-	var b strings.Builder
 	if f == nil {
 		return ""
 	}
+	p := newPrinter(f.cidx)
 	for i, d := range f.Decls {
+		// Blank-line separator first, then the comments that sit above this declaration (the file
+		// header and per-decl doc comments), so a leading comment stays glued to what it documents:
+		// `decl1\n\n// doc\ndecl2`.
 		if i > 0 {
-			b.WriteString("\n")
+			p.WriteString("\n")
 		}
+		p.leadingBefore(declLine(d), "")
 		switch n := d.(type) {
 		case *AgentDecl:
-			printAgent(&b, n)
+			printAgent(p, n)
 		case *WorkflowDecl:
-			printWorkflow(&b, n)
+			printWorkflow(p, n)
 		case *ToolDecl:
-			printTool(&b, n)
+			printTool(p, n)
 		case *PolicyDecl:
-			printPolicy(&b, n)
+			printPolicy(p, n)
 		case *EnvironmentDecl:
-			printEnvironment(&b, n)
+			printEnvironment(p, n)
 		case *ProviderDecl:
-			printProvider(&b, n)
+			printProvider(p, n)
 		case *DefaultsDecl:
-			printDefaults(&b, n)
+			printDefaults(p, n)
 		case *LimitsDecl:
-			printLimitsDecl(&b, n)
+			printLimitsDecl(p, n)
 		default:
-			fmt.Fprintf(&b, "/* unknown decl %T */\n", d)
+			fmt.Fprintf(p, "/* unknown decl %T */\n", d)
 		}
 	}
-	return b.String()
+	// Comments after the last declaration (a trailing file footer) must survive too.
+	p.flushRemaining("")
+	return p.String()
+}
+
+// declLine is the source line a top-level declaration starts on, used to gather the comments above it.
+func declLine(d Decl) int {
+	if d == nil {
+		return 0
+	}
+	return d.Position().Line
 }
 
 // Format parses src and returns canonical .agent source plus any diagnostics.
@@ -53,42 +67,54 @@ func Format(file, src string) (string, Diagnostics) {
 	return Print(f), diags
 }
 
-func printAgent(b *strings.Builder, a *AgentDecl) {
-	fmt.Fprintf(b, "agent %s {\n", identName(a.Name))
+func printAgent(p *printer, a *AgentDecl) {
+	fmt.Fprintf(p, "agent %s {\n", identName(a.Name))
 	if a.Model != nil {
-		fmt.Fprintf(b, "    model %s/%s\n", a.Model.Provider, a.Model.Name)
+		p.leadingBefore(a.Model.Pos.Line, "    ")
+		p.field("    ", fmt.Sprintf("model %s/%s", a.Model.Provider, a.Model.Name), a.Model.Pos.Line)
 	}
 	if a.Policy != nil {
-		fmt.Fprintf(b, "    policy %s\n", a.Policy.Name)
+		p.leadingBefore(a.Policy.Pos.Line, "    ")
+		p.field("    ", "policy "+a.Policy.Name, a.Policy.Pos.Line)
 	}
 	if a.Description != nil {
-		printStringField(b, "    ", "description", a.Description.Value)
+		p.leadingBefore(a.Description.Pos.Line, "    ")
+		printStringField(p, "    ", "description", a.Description.Value, a.Description.Pos.Line)
 	}
 	if a.Instructions != nil {
-		printInstructions(b, a.Instructions.Value)
+		p.leadingBefore(a.Instructions.Pos.Line, "    ")
+		printInstructions(p, a.Instructions.Value, a.Instructions.Pos.Line)
 	}
 	if a.InstructionsFile != nil && a.InstructionsFile.Path != nil {
+		p.leadingBefore(a.InstructionsFile.Pos.Line, "    ")
 		// Re-emit the file("...") form verbatim (never the resolved prompt text), so fmt
 		// round-trips the reference (#360).
-		fmt.Fprintf(b, "    instructions file(%s)\n", strconv.Quote(a.InstructionsFile.Path.Value))
+		p.field("    ", fmt.Sprintf("instructions file(%s)", strconv.Quote(a.InstructionsFile.Path.Value)), a.InstructionsFile.Pos.Line)
 	}
 	if a.Constraints != nil {
-		printConstraints(b, a.Constraints)
+		p.leadingBefore(a.Constraints.Pos.Line, "    ")
+		printConstraints(p, a.Constraints)
 	}
 	if len(a.Grants) > 0 {
-		b.WriteString("    grants {\n")
+		p.leadingBefore(a.GrantsPos.Line, "    ")
+		p.WriteString("    grants {\n")
 		for _, g := range a.Grants {
-			fmt.Fprintf(b, "        %s\n", dottedName(g.Segments))
+			p.leadingBefore(g.Pos.Line, "        ")
+			p.field("        ", dottedName(g.Segments), g.Pos.Line)
 		}
-		b.WriteString("    }\n")
+		p.blockTail(a.GrantsPos.Line, "        ")
+		p.WriteString("    }\n")
 	}
 	if a.Input != nil {
-		fmt.Fprintf(b, "    input %s\n", a.Input.Name)
+		p.leadingBefore(a.Input.Pos.Line, "    ")
+		p.field("    ", "input "+a.Input.Name, a.Input.Pos.Line)
 	}
 	if a.Output != nil {
-		fmt.Fprintf(b, "    output %s\n", a.Output.Name)
+		p.leadingBefore(a.Output.Pos.Line, "    ")
+		p.field("    ", "output "+a.Output.Name, a.Output.Pos.Line)
 	}
-	b.WriteString("}\n")
+	p.blockTail(a.Pos.Line, "    ")
+	p.WriteString("}\n")
 }
 
 // printInstructions renders the agent prompt. A multiline value prints as a
@@ -99,8 +125,8 @@ func printAgent(b *strings.Builder, a *AgentDecl) {
 // the raw multiline body cannot represent (it would read as a premature close and
 // corrupt the file) — falls back to the escaped single-quoted form, which escapes
 // newlines and quotes and always re-parses.
-func printInstructions(b *strings.Builder, v string) {
-	printStringField(b, "    ", "instructions", v)
+func printInstructions(p *printer, v string, line int) {
+	printStringField(p, "    ", "instructions", v, line)
 }
 
 // printStringField renders a string-valued field (instructions, description) at the
@@ -108,52 +134,58 @@ func printInstructions(b *strings.Builder, v string) {
 // containing a `"""`, which the raw block cannot hold) as a canonical `"""…"""` block
 // whose body lines carry the field indent — the exact shape normalizeMultiline strips
 // back, so parse -> print -> parse is stable.
-func printStringField(b *strings.Builder, indent, name, v string) {
+func printStringField(p *printer, indent, name, v string, line int) {
 	if !strings.Contains(v, "\n") || strings.Contains(v, `"""`) {
-		fmt.Fprintf(b, "%s%s %s\n", indent, name, strconv.Quote(v))
+		// Single-line value: it can carry a trailing comment on its source line.
+		p.field(indent, fmt.Sprintf("%s %s", name, strconv.Quote(v)), line)
 		return
 	}
-	fmt.Fprintf(b, "%s%s \"\"\"\n", indent, name)
+	fmt.Fprintf(p, "%s%s \"\"\"\n", indent, name)
 	for _, ln := range strings.Split(v, "\n") {
 		if ln == "" {
-			b.WriteString("\n")
+			p.WriteString("\n")
 		} else {
-			b.WriteString(indent + ln + "\n")
+			p.WriteString(indent + ln + "\n")
 		}
 	}
-	fmt.Fprintf(b, "%s\"\"\"\n", indent)
+	fmt.Fprintf(p, "%s\"\"\"\n", indent)
 }
 
 // printConstraints renders the `constraints { }` block, one field per line in a
 // stable order, omitting fields the author did not set.
-func printConstraints(b *strings.Builder, c *Constraints) {
-	b.WriteString("    constraints {\n")
+func printConstraints(p *printer, c *Constraints) {
+	// A trailing comment on a single-line source block (`constraints { … } // note`) attaches to the
+	// opening line, which fmt keeps even as it expands the block onto multiple lines.
+	p.WriteString("    constraints {")
+	p.trailingOn(c.Pos.Line)
+	p.WriteString("\n")
 	if c.MaxIterations != nil {
-		fmt.Fprintf(b, "        maxIterations %d\n", *c.MaxIterations)
+		fmt.Fprintf(p, "        maxIterations %d\n", *c.MaxIterations)
 	}
 	if c.MaxTokens != nil {
-		fmt.Fprintf(b, "        maxTokens %d\n", *c.MaxTokens)
+		fmt.Fprintf(p, "        maxTokens %d\n", *c.MaxTokens)
 	}
 	if c.TimeoutSeconds != nil {
-		fmt.Fprintf(b, "        timeoutSeconds %d\n", *c.TimeoutSeconds)
+		fmt.Fprintf(p, "        timeoutSeconds %d\n", *c.TimeoutSeconds)
 	}
 	if c.Temperature != nil {
-		fmt.Fprintf(b, "        temperature %s\n", strconv.FormatFloat(*c.Temperature, 'g', -1, 64))
+		fmt.Fprintf(p, "        temperature %s\n", strconv.FormatFloat(*c.Temperature, 'g', -1, 64))
 	}
 	if c.RequireStructuredOutput != nil {
-		fmt.Fprintf(b, "        requireStructuredOutput %s\n", strconv.FormatBool(*c.RequireStructuredOutput))
+		fmt.Fprintf(p, "        requireStructuredOutput %s\n", strconv.FormatBool(*c.RequireStructuredOutput))
 	}
-	b.WriteString("    }\n")
+	p.blockTail(c.Pos.Line, "        ")
+	p.WriteString("    }\n")
 }
 
-func printWorkflow(b *strings.Builder, w *WorkflowDecl) {
+func printWorkflow(p *printer, w *WorkflowDecl) {
 	params := make([]string, len(w.Params))
 	for i, p := range w.Params {
 		params[i] = fmt.Sprintf("%s: %s", identName(p.Name), typeName(p.Type))
 	}
-	fmt.Fprintf(b, "workflow %s(%s)", identName(w.Name), strings.Join(params, ", "))
+	fmt.Fprintf(p, "workflow %s(%s)", identName(w.Name), strings.Join(params, ", "))
 	if w.Result != nil {
-		fmt.Fprintf(b, " -> %s", w.Result.Name)
+		fmt.Fprintf(p, " -> %s", w.Result.Name)
 	}
 	var clauses []string
 	if w.Policy != nil {
@@ -169,119 +201,129 @@ func printWorkflow(b *strings.Builder, w *WorkflowDecl) {
 	if w.Description != nil {
 		// A description (possibly multiline) does not fit the inline header, so the
 		// header clauses go on their own indented lines before the opening brace.
-		b.WriteString("\n")
-		printStringField(b, "    ", "description", w.Description.Value)
+		p.WriteString("\n")
+		printStringField(p, "    ", "description", w.Description.Value, w.Description.Pos.Line)
 		for _, c := range clauses {
-			fmt.Fprintf(b, "    %s\n", c)
+			fmt.Fprintf(p, "    %s\n", c)
 		}
-		b.WriteString("{\n")
+		p.WriteString("{\n")
 	} else {
 		for _, c := range clauses {
-			fmt.Fprintf(b, " %s", c)
+			fmt.Fprintf(p, " %s", c)
 		}
-		b.WriteString(" {\n")
+		p.WriteString(" {\n")
 	}
 	for _, s := range w.Body {
-		printStmt(b, s, 1)
+		printStmt(p, s, 1)
 	}
-	b.WriteString("}\n")
+	p.blockTail(w.Pos.Line, "    ")
+	p.WriteString("}\n")
 }
 
-func printStmt(b *strings.Builder, s Stmt, depth int) {
+func printStmt(p *printer, s Stmt, depth int) {
 	indent := strings.Repeat("    ", depth)
+	// Comments authored above this statement attach to it, at the statement's indent.
+	p.leadingBefore(s.Position().Line, indent)
 	switch n := s.(type) {
 	case *AssignStmt:
-		fmt.Fprintf(b, "%s%s = %s\n", indent, identName(n.Target), printExpr(n.Value))
+		p.field(indent, fmt.Sprintf("%s = %s", identName(n.Target), printExpr(n.Value)), n.Pos.Line)
 	case *ExprStmt:
-		fmt.Fprintf(b, "%s%s\n", indent, printExpr(n.X))
+		p.field(indent, printExpr(n.X), n.Pos.Line)
 	case *ReturnStmt:
-		fmt.Fprintf(b, "%sreturn %s\n", indent, printExpr(n.Value))
+		p.field(indent, "return "+printExpr(n.Value), n.Pos.Line)
 	case *ParallelStmt:
-		fmt.Fprintf(b, "%sparallel {\n", indent)
+		fmt.Fprintf(p, "%sparallel {\n", indent)
 		for _, a := range n.Body {
-			printStmt(b, a, depth+1)
+			printStmt(p, a, depth+1)
 		}
-		fmt.Fprintf(b, "%s}\n", indent)
+		p.blockTail(n.Pos.Line, indent+"    ")
+		fmt.Fprintf(p, "%s}\n", indent)
 	case *IfStmt:
-		printIf(b, n, depth)
+		printIf(p, n, depth)
 	case *ForStmt:
 		kw := "for"
 		if n.Parallel {
 			kw = "parallel for"
 		}
-		fmt.Fprintf(b, "%s%s %s in %s {\n", indent, kw, identName(n.Var), printExpr(n.In))
+		fmt.Fprintf(p, "%s%s %s in %s {\n", indent, kw, identName(n.Var), printExpr(n.In))
 		for _, st := range n.Body {
-			printStmt(b, st, depth+1)
+			printStmt(p, st, depth+1)
 		}
-		fmt.Fprintf(b, "%s}\n", indent)
+		p.blockTail(n.Pos.Line, indent+"    ")
+		fmt.Fprintf(p, "%s}\n", indent)
 	case *WhileStmt:
-		fmt.Fprintf(b, "%swhile %s limit %d {\n", indent, printExpr(n.Cond), n.Limit)
+		fmt.Fprintf(p, "%swhile %s limit %d {\n", indent, printExpr(n.Cond), n.Limit)
 		for _, st := range n.Body {
-			printStmt(b, st, depth+1)
+			printStmt(p, st, depth+1)
 		}
-		fmt.Fprintf(b, "%s}\n", indent)
+		p.blockTail(n.Pos.Line, indent+"    ")
+		fmt.Fprintf(p, "%s}\n", indent)
 	case *RetryStmt:
-		fmt.Fprintf(b, "%sretry until %s limit %d {\n", indent, printExpr(n.Cond), n.Limit)
+		fmt.Fprintf(p, "%sretry until %s limit %d {\n", indent, printExpr(n.Cond), n.Limit)
 		for _, st := range n.Body {
-			printStmt(b, st, depth+1)
+			printStmt(p, st, depth+1)
 		}
-		fmt.Fprintf(b, "%s}\n", indent)
+		p.blockTail(n.Pos.Line, indent+"    ")
+		fmt.Fprintf(p, "%s}\n", indent)
 	case *ApprovalStmt:
 		inner := indent + "    "
-		fmt.Fprintf(b, "%sapproval %s {\n", indent, identName(n.Bind))
+		fmt.Fprintf(p, "%sapproval %s {\n", indent, identName(n.Bind))
 		if n.Description != nil {
-			printStringField(b, inner, "description", n.Description.Value)
+			printStringField(p, inner, "description", n.Description.Value, n.Description.Pos.Line)
 		}
 		if len(n.RedactKeys) > 0 {
-			fmt.Fprintf(b, "%sredactKeys {", inner)
+			fmt.Fprintf(p, "%sredactKeys {", inner)
 			for _, k := range n.RedactKeys {
-				fmt.Fprintf(b, " %s", strconv.Quote(k.Value))
+				fmt.Fprintf(p, " %s", strconv.Quote(k.Value))
 			}
-			b.WriteString(" }\n")
+			p.WriteString(" }\n")
 		}
 		if len(n.With) > 0 {
-			fmt.Fprintf(b, "%swith {\n", inner)
+			fmt.Fprintf(p, "%swith {\n", inner)
 			arg := inner + "    "
 			for _, a := range n.With {
 				if a.Name != nil {
-					fmt.Fprintf(b, "%s%s: %s\n", arg, identName(a.Name), printExpr(a.Value))
+					fmt.Fprintf(p, "%s%s: %s\n", arg, identName(a.Name), printExpr(a.Value))
 				} else {
-					fmt.Fprintf(b, "%s%s\n", arg, printExpr(a.Value))
+					fmt.Fprintf(p, "%s%s\n", arg, printExpr(a.Value))
 				}
 			}
-			fmt.Fprintf(b, "%s}\n", inner)
+			fmt.Fprintf(p, "%s}\n", inner)
 		}
-		fmt.Fprintf(b, "%s}\n", indent)
+		fmt.Fprintf(p, "%s}\n", indent)
 	default:
-		fmt.Fprintf(b, "%s/* unknown stmt %T */\n", indent, s)
+		fmt.Fprintf(p, "%s/* unknown stmt %T */\n", indent, s)
 	}
 }
 
 // printIf renders a conditional, collapsing `else { if … }` back into
 // `else if …` when the else arm is exactly one nested IfStmt.
-func printIf(b *strings.Builder, n *IfStmt, depth int) {
+func printIf(p *printer, n *IfStmt, depth int) {
 	indent := strings.Repeat("    ", depth)
-	fmt.Fprintf(b, "%sif %s {\n", indent, printExpr(n.Cond))
+	fmt.Fprintf(p, "%sif %s {\n", indent, printExpr(n.Cond))
 	for _, st := range n.Then {
-		printStmt(b, st, depth+1)
+		printStmt(p, st, depth+1)
 	}
 	if len(n.Else) == 1 {
 		if elif, ok := n.Else[0].(*IfStmt); ok {
-			fmt.Fprintf(b, "%s} else ", indent)
-			// Render the nested if without its leading indent, on the same line.
-			var nested strings.Builder
-			printIf(&nested, elif, depth)
-			b.WriteString(strings.TrimLeft(nested.String(), " "))
+			fmt.Fprintf(p, "%s} else ", indent)
+			// Render the nested if without its leading indent, on the same line. The nested printer
+			// shares the comment index and the emitted-flags slice, so a comment inside the else-if
+			// body is emitted exactly once.
+			nested := &printer{idx: p.idx, emitted: p.emitted}
+			printIf(nested, elif, depth)
+			p.WriteString(strings.TrimLeft(nested.String(), " "))
 			return
 		}
 	}
 	if len(n.Else) > 0 {
-		fmt.Fprintf(b, "%s} else {\n", indent)
+		fmt.Fprintf(p, "%s} else {\n", indent)
 		for _, st := range n.Else {
-			printStmt(b, st, depth+1)
+			printStmt(p, st, depth+1)
 		}
 	}
-	fmt.Fprintf(b, "%s}\n", indent)
+	p.blockTail(n.Pos.Line, indent+"    ")
+	fmt.Fprintf(p, "%s}\n", indent)
 }
 
 func printExpr(e Expr) string {

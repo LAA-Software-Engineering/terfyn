@@ -8,7 +8,9 @@ import (
 // Lexer scans .agent source into a token stream. It is newline-insensitive:
 // statement and field boundaries are recovered by the grammar (each construct
 // has a deterministic shape), so newlines are ordinary whitespace and are not
-// emitted as tokens. Line comments (// to end of line) are skipped.
+// emitted as tokens. Line comments (// to end of line) are not emitted as tokens
+// either, but their text and position are collected (see Comments) so the
+// formatter can round-trip them (issue #509).
 type Lexer struct {
 	src  string
 	file string
@@ -19,6 +21,23 @@ type Lexer struct {
 	line, col int
 
 	diags Diagnostics
+
+	// comments holds every // line comment in source order, classified standalone
+	// vs trailing (see Comment) by whether anything precedes it on its line.
+	comments []Comment
+}
+
+// Comments returns the // line comments recovered in source order (issue #509).
+func (l *Lexer) Comments() []Comment { return l.comments }
+
+// Comment is one // line comment recovered by the lexer for the formatter (issue #509).
+// Text is the content after "//" with surrounding whitespace trimmed (no leading "//",
+// no trailing newline). Standalone is true when the comment sits on its own line; false
+// when it trails code on the same line (e.g. `model x // note`).
+type Comment struct {
+	Pos        Pos
+	Text       string
+	Standalone bool
 }
 
 // NewLexer returns a lexer over src. file is recorded in every token's Pos.
@@ -342,7 +361,7 @@ func (l *Lexer) skipTrivia() {
 		case r == '/':
 			// Look ahead for a second '/'. A single slash is a real token.
 			if l.offset+1 < len(l.src) && l.src[l.offset+1] == '/' {
-				l.skipLineComment()
+				l.collectLineComment()
 				continue
 			}
 			return
@@ -352,16 +371,46 @@ func (l *Lexer) skipTrivia() {
 	}
 }
 
-// skipLineComment consumes a // comment through the end of the line (the
-// terminating newline is left for skipTrivia to count).
-func (l *Lexer) skipLineComment() {
+// collectLineComment consumes a // comment through the end of the line (the
+// terminating newline is left for skipTrivia to count) and records it for the
+// formatter (issue #509). The comment is standalone when only whitespace precedes
+// it on its line, otherwise it trails the code on that line. Text is the content
+// after "//" with surrounding whitespace trimmed.
+func (l *Lexer) collectLineComment() {
+	start := l.pos()
+	startOff := l.offset
+	standalone := l.onlyBlankBeforeLineStart(startOff)
+	l.advance() // first '/'
+	l.advance() // second '/'
+	begin := l.offset
 	for {
 		r, w := l.peek()
 		if w == 0 || r == '\n' {
-			return
+			break
 		}
 		l.advance()
 	}
+	l.comments = append(l.comments, Comment{
+		Pos:        start,
+		Text:       strings.TrimSpace(l.src[begin:l.offset]),
+		Standalone: standalone,
+	})
+}
+
+// onlyBlankBeforeLineStart reports whether every byte from the start of off's line
+// up to off is a space or tab — i.e. the token at off is the first non-blank on its
+// line. Used to classify a comment as standalone (own line) vs trailing.
+func (l *Lexer) onlyBlankBeforeLineStart(off int) bool {
+	for i := off - 1; i >= 0; i-- {
+		c := l.src[i]
+		if c == '\n' {
+			return true
+		}
+		if c != ' ' && c != '\t' && c != '\r' {
+			return false
+		}
+	}
+	return true
 }
 
 func (l *Lexer) errorf(pos Pos, format string, args ...any) {

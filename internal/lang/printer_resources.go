@@ -9,99 +9,117 @@ import (
 // Canonical printing for inline tool/policy declarations (ADR 005, issue #333). Fields are
 // newline-separated, matching the rest of the .agent surface.
 
-func printTool(b *strings.Builder, d *ToolDecl) {
-	fmt.Fprintf(b, "tool %s {\n", identName(d.Name))
+func printTool(p *printer, d *ToolDecl) {
+	fmt.Fprintf(p, "tool %s {\n", identName(d.Name))
 	if d.Type != nil {
-		fmt.Fprintf(b, "    type %s\n", d.Type.Name)
+		p.leadingBefore(d.Type.Pos.Line, "    ")
+		p.field("    ", "type "+d.Type.Name, d.Type.Pos.Line)
 	}
 	if m := d.MCP; m != nil {
-		b.WriteString("    mcp {\n")
-		printStringLitField(b, "        ", "transport", m.Transport)
-		printStringLitField(b, "        ", "command", m.Command)
+		p.leadingBefore(m.Pos.Line, "    ")
+		p.WriteString("    mcp {\n")
+		printStringLitField(p, "        ", "transport", m.Transport)
+		printStringLitField(p, "        ", "command", m.Command)
 		if len(m.Args) > 0 {
-			b.WriteString("        args {")
+			p.WriteString("        args {")
 			for _, a := range m.Args {
-				fmt.Fprintf(b, " %s", strconv.Quote(a.Value))
+				fmt.Fprintf(p, " %s", strconv.Quote(a.Value))
 			}
-			b.WriteString(" }\n")
+			p.WriteString(" }\n")
 		}
-		printStringLitField(b, "        ", "url", m.URL)
-		printHeadersBlock(b, "        ", m.Headers)
-		b.WriteString("    }\n")
+		printStringLitField(p, "        ", "url", m.URL)
+		printHeadersBlock(p, "        ", m.Headers)
+		p.blockTail(m.Pos.Line, "        ")
+		p.WriteString("    }\n")
 	}
 	if h := d.HTTP; h != nil {
-		b.WriteString("    http {\n")
-		printStringLitField(b, "        ", "baseUrl", h.BaseURL)
-		printHeadersBlock(b, "        ", h.Headers)
-		b.WriteString("    }\n")
+		p.leadingBefore(h.Pos.Line, "    ")
+		p.WriteString("    http {\n")
+		printStringLitField(p, "        ", "baseUrl", h.BaseURL)
+		printHeadersBlock(p, "        ", h.Headers)
+		p.blockTail(h.Pos.Line, "        ")
+		p.WriteString("    }\n")
 	}
 	if w := d.Workspace; w != nil {
-		b.WriteString("    workspace {\n")
-		printStringLitField(b, "        ", "root", w.Root)
-		printStringLitField(b, "        ", "testCommand", w.TestCommand)
-		b.WriteString("    }\n")
+		p.leadingBefore(w.Pos.Line, "    ")
+		p.WriteString("    workspace {\n")
+		printStringLitField(p, "        ", "root", w.Root)
+		printStringLitField(p, "        ", "testCommand", w.TestCommand)
+		p.blockTail(w.Pos.Line, "        ")
+		p.WriteString("    }\n")
 	}
 	if r := d.Retry; r != nil {
-		b.WriteString("    retry {\n")
+		p.leadingBefore(r.Pos.Line, "    ")
+		p.WriteString("    retry {\n")
 		if r.MaxAttempts != nil {
-			fmt.Fprintf(b, "        maxAttempts %d\n", *r.MaxAttempts)
+			fmt.Fprintf(p, "        maxAttempts %d\n", *r.MaxAttempts)
 		}
-		printStringLitField(b, "        ", "backoff", r.Backoff)
-		b.WriteString("    }\n")
+		printStringLitField(p, "        ", "backoff", r.Backoff)
+		p.blockTail(r.Pos.Line, "        ")
+		p.WriteString("    }\n")
 	}
 	if lim := d.Limits; lim != nil {
-		printLimitsBlockAt(b, "    ", lim)
+		p.leadingBefore(lim.Pos.Line, "    ")
+		printLimitsBlockAt(p, "    ", lim)
 	}
 	if s := d.Safety; s != nil {
-		b.WriteString("    safety {\n")
-		printBoolField(b, "        ", "trusted", s.Trusted)
-		printBoolField(b, "        ", "sideEffects", s.SideEffects)
-		printBoolField(b, "        ", "requiresApproval", s.RequiresApproval)
-		b.WriteString("    }\n")
+		p.leadingBefore(s.Pos.Line, "    ")
+		p.WriteString("    safety {\n")
+		printBoolField(p, "        ", "trusted", s.Trusted)
+		printBoolField(p, "        ", "sideEffects", s.SideEffects)
+		printBoolField(p, "        ", "requiresApproval", s.RequiresApproval)
+		p.blockTail(s.Pos.Line, "        ")
+		p.WriteString("    }\n")
 	}
 	if d.Operations != nil {
 		if len(d.Operations.Ops) == 0 {
-			b.WriteString("    operations {}\n") // an explicit empty block: a closed, deny-all manifest
+			p.leadingBefore(d.Operations.Pos.Line, "    ")
+			p.WriteString("    operations {}\n") // an explicit empty block: a closed, deny-all manifest
 		} else {
-			b.WriteString("    operations {\n")
+			p.leadingBefore(d.Operations.Pos.Line, "    ")
+			p.WriteString("    operations {\n")
 			for _, op := range d.Operations.Ops {
-				fmt.Fprintf(b, "        %s {", identName(op.Name))
+				p.leadingBefore(op.Pos.Line, "        ")
+				line := identName(op.Name) + " {"
 				if op.Schema != nil {
-					fmt.Fprintf(b, " schema %s", strconv.Quote(op.Schema.Value))
+					line += " schema " + strconv.Quote(op.Schema.Value)
 				}
 				if len(op.Effects) > 0 {
-					fmt.Fprintf(b, " effects { %s }", joinEffects(op.Effects))
+					line += " effects { " + joinEffects(op.Effects) + " }"
 				}
-				b.WriteString(" }\n")
+				line += " }"
+				p.field("        ", line, op.Pos.Line)
 			}
-			b.WriteString("    }\n")
+			p.blockTail(d.Operations.Pos.Line, "        ")
+			p.WriteString("    }\n")
 		}
 	}
-	b.WriteString("}\n")
+	p.blockTail(d.Pos.Line, "    ")
+	p.WriteString("}\n")
 }
 
 // printStringLitField prints a quoted string field only when the literal is present (unlike
 // printStringField, which always emits). Used for optional transport fields.
-func printStringLitField(b *strings.Builder, indent, name string, s *StringLit) {
+func printStringLitField(p *printer, indent, name string, s *StringLit) {
 	if s == nil {
 		return
 	}
-	printStringField(b, indent, name, s.Value)
+	printStringField(p, indent, name, s.Value, s.Pos.Line)
 }
 
 // printHeadersBlock renders a `headers { "<key>" "<value>" … }` block in author order.
-func printHeadersBlock(b *strings.Builder, indent string, headers []*HeaderPair) {
+func printHeadersBlock(p *printer, indent string, headers []*HeaderPair) {
 	if len(headers) == 0 {
 		return
 	}
-	fmt.Fprintf(b, "%sheaders {\n", indent)
+	fmt.Fprintf(p, "%sheaders {\n", indent)
 	for _, h := range headers {
 		if h == nil || h.Key == nil {
 			continue
 		}
-		fmt.Fprintf(b, "%s    %s %s\n", indent, strconv.Quote(h.Key.Value), strconv.Quote(stringLitOrEmpty(h.Value)))
+		fmt.Fprintf(p, "%s    %s %s\n", indent, strconv.Quote(h.Key.Value), strconv.Quote(stringLitOrEmpty(h.Value)))
 	}
-	fmt.Fprintf(b, "%s}\n", indent)
+	fmt.Fprintf(p, "%s}\n", indent)
 }
 
 func stringLitOrEmpty(s *StringLit) string {
@@ -111,87 +129,101 @@ func stringLitOrEmpty(s *StringLit) string {
 	return s.Value
 }
 
-func printPolicy(b *strings.Builder, d *PolicyDecl) {
-	fmt.Fprintf(b, "policy %s {\n", identName(d.Name))
+func printPolicy(p *printer, d *PolicyDecl) {
+	fmt.Fprintf(p, "policy %s {\n", identName(d.Name))
 	if d.Preset != nil {
-		fmt.Fprintf(b, "    preset %s\n", identName(d.Preset))
+		p.leadingBefore(d.Preset.Pos.Line, "    ")
+		p.field("    ", "preset "+identName(d.Preset), d.Preset.Pos.Line)
 	}
 	if e := d.Execution; e != nil {
-		b.WriteString("    execution {\n")
+		p.leadingBefore(e.Pos.Line, "    ")
+		p.WriteString("    execution {\n")
 		if e.MaxTotalCostUsd != nil {
-			fmt.Fprintf(b, "        maxTotalCostUsd %s\n", strconv.FormatFloat(*e.MaxTotalCostUsd, 'f', -1, 64))
+			fmt.Fprintf(p, "        maxTotalCostUsd %s\n", strconv.FormatFloat(*e.MaxTotalCostUsd, 'f', -1, 64))
 		}
 		if e.MaxWallClockSeconds != nil {
-			fmt.Fprintf(b, "        maxWallClockSeconds %d\n", *e.MaxWallClockSeconds)
+			fmt.Fprintf(p, "        maxWallClockSeconds %d\n", *e.MaxWallClockSeconds)
 		}
-		printBoolField(b, "        ", "requireStructuredOutput", e.RequireStructuredOutput)
-		b.WriteString("    }\n")
+		printBoolField(p, "        ", "requireStructuredOutput", e.RequireStructuredOutput)
+		p.blockTail(e.Pos.Line, "        ")
+		p.WriteString("    }\n")
 	}
 	if a := d.Approvals; a != nil {
-		b.WriteString("    approvals {\n")
+		p.leadingBefore(a.Pos.Line, "    ")
+		p.WriteString("    approvals {\n")
 		if len(a.RequiredFor) > 0 {
-			b.WriteString("        requiredFor {\n")
+			p.WriteString("        requiredFor {\n")
 			for _, g := range a.RequiredFor {
-				fmt.Fprintf(b, "            %s\n", grantPath(g))
+				fmt.Fprintf(p, "            %s\n", grantPath(g))
 			}
-			b.WriteString("        }\n")
+			p.WriteString("        }\n")
 		}
-		printBoolField(b, "        ", "requireAllTools", a.RequireAllTools)
-		printBoolField(b, "        ", "permissive", a.Permissive)
-		b.WriteString("    }\n")
+		printBoolField(p, "        ", "requireAllTools", a.RequireAllTools)
+		printBoolField(p, "        ", "permissive", a.Permissive)
+		p.blockTail(a.Pos.Line, "        ")
+		p.WriteString("    }\n")
 	}
 	if e := d.Effects; e != nil {
-		b.WriteString("    effects {\n")
+		p.leadingBefore(e.Pos.Line, "    ")
+		p.WriteString("    effects {\n")
 		if len(e.Permit) > 0 {
-			fmt.Fprintf(b, "        permit { %s }\n", joinEffects(e.Permit))
+			p.leadingBefore(e.Permit[0].Pos.Line, "        ")
+			p.field("        ", fmt.Sprintf("permit { %s }", joinEffects(e.Permit)), e.Permit[0].Pos.Line)
 		}
 		if len(e.PermitWithApproval) > 0 {
-			fmt.Fprintf(b, "        permitWithApproval { %s }\n", joinEffects(e.PermitWithApproval))
+			p.leadingBefore(e.PermitWithApproval[0].Pos.Line, "        ")
+			p.field("        ", fmt.Sprintf("permitWithApproval { %s }", joinEffects(e.PermitWithApproval)), e.PermitWithApproval[0].Pos.Line)
 		}
-		b.WriteString("    }\n")
+		p.blockTail(e.Pos.Line, "        ")
+		p.WriteString("    }\n")
 	}
 	if h := d.Hitl; h != nil {
-		printHitlAt(b, "    ", h)
+		p.leadingBefore(h.Pos.Line, "    ")
+		printHitlAt(p, "    ", h)
 	}
 	if t := d.Tools; t != nil {
-		b.WriteString("    tools {\n")
-		printBoolField(b, "        ", "forbidUnknownTools", t.ForbidUnknownTools)
-		b.WriteString("    }\n")
+		p.leadingBefore(t.Pos.Line, "    ")
+		p.WriteString("    tools {\n")
+		printBoolField(p, "        ", "forbidUnknownTools", t.ForbidUnknownTools)
+		p.blockTail(t.Pos.Line, "        ")
+		p.WriteString("    }\n")
 	}
-	b.WriteString("}\n")
+	p.blockTail(d.Pos.Line, "    ")
+	p.WriteString("}\n")
 }
 
 // printHitlAt renders a `hitl { … }` block at the given indent (issues #106, #440). interruptOn
 // entries and switch-map entries print in author order (they are stored as slices), so a formatted
 // file round-trips; the fixed-name config fields print in a stable order.
-func printHitlAt(b *strings.Builder, indent string, h *HitlBlock) {
+func printHitlAt(p *printer, indent string, h *HitlBlock) {
 	inner := indent + "    "
-	fmt.Fprintf(b, "%shitl {\n", indent)
-	printStringLitField(b, inner, "descriptionPrefix", h.DescriptionPrefix)
-	printStringListInline(b, inner, "redactKeys", h.RedactKeys)
-	printSwitchMapBlock(b, inner, "toolSwitchMap", h.ToolSwitchMap)
+	fmt.Fprintf(p, "%shitl {\n", indent)
+	printStringLitField(p, inner, "descriptionPrefix", h.DescriptionPrefix)
+	printStringListInline(p, inner, "redactKeys", h.RedactKeys)
+	printSwitchMapBlock(p, inner, "toolSwitchMap", h.ToolSwitchMap)
 	if len(h.InterruptOn) > 0 {
-		fmt.Fprintf(b, "%sinterruptOn {\n", inner)
+		fmt.Fprintf(p, "%sinterruptOn {\n", inner)
 		entryIndent := inner + "    "
 		for _, e := range h.InterruptOn {
 			if e == nil || e.Name == nil {
 				continue
 			}
 			if e.Config == nil {
-				fmt.Fprintf(b, "%s%s\n", entryIndent, identName(e.Name))
+				fmt.Fprintf(p, "%s%s\n", entryIndent, identName(e.Name))
 				continue
 			}
-			fmt.Fprintf(b, "%s%s {\n", entryIndent, identName(e.Name))
-			printInterruptConfig(b, entryIndent+"    ", e.Config)
-			fmt.Fprintf(b, "%s}\n", entryIndent)
+			fmt.Fprintf(p, "%s%s {\n", entryIndent, identName(e.Name))
+			printInterruptConfig(p, entryIndent+"    ", e.Config)
+			fmt.Fprintf(p, "%s}\n", entryIndent)
 		}
-		fmt.Fprintf(b, "%s}\n", inner)
+		fmt.Fprintf(p, "%s}\n", inner)
 	}
-	fmt.Fprintf(b, "%s}\n", indent)
+	p.blockTail(h.Pos.Line, inner)
+	fmt.Fprintf(p, "%s}\n", indent)
 }
 
 // printInterruptConfig renders a per-tool interruptOn config block's fields in a stable order.
-func printInterruptConfig(b *strings.Builder, indent string, c *InterruptConfig) {
+func printInterruptConfig(p *printer, indent string, c *InterruptConfig) {
 	if len(c.AllowedDecisions) > 0 {
 		names := make([]string, 0, len(c.AllowedDecisions))
 		for _, d := range c.AllowedDecisions {
@@ -199,67 +231,67 @@ func printInterruptConfig(b *strings.Builder, indent string, c *InterruptConfig)
 				names = append(names, d.Name)
 			}
 		}
-		fmt.Fprintf(b, "%sallowedDecisions { %s }\n", indent, strings.Join(names, " "))
+		fmt.Fprintf(p, "%sallowedDecisions { %s }\n", indent, strings.Join(names, " "))
 	}
-	printStringLitField(b, indent, "description", c.Description)
-	printStringListInline(b, indent, "allowedEditArgs", c.AllowedEditArgs)
-	printStringListInline(b, indent, "deniedEditArgs", c.DeniedEditArgs)
-	printStringListInline(b, indent, "allowedEditPaths", c.AllowedEditPaths)
-	printStringListInline(b, indent, "deniedEditPaths", c.DeniedEditPaths)
-	printStringListInline(b, indent, "allowedEditTools", c.AllowedEditTools)
-	printSwitchMapBlock(b, indent, "switchMap", c.SwitchMap)
-	printStringListInline(b, indent, "redactKeys", c.RedactKeys)
+	printStringLitField(p, indent, "description", c.Description)
+	printStringListInline(p, indent, "allowedEditArgs", c.AllowedEditArgs)
+	printStringListInline(p, indent, "deniedEditArgs", c.DeniedEditArgs)
+	printStringListInline(p, indent, "allowedEditPaths", c.AllowedEditPaths)
+	printStringListInline(p, indent, "deniedEditPaths", c.DeniedEditPaths)
+	printStringListInline(p, indent, "allowedEditTools", c.AllowedEditTools)
+	printSwitchMapBlock(p, indent, "switchMap", c.SwitchMap)
+	printStringListInline(p, indent, "redactKeys", c.RedactKeys)
 }
 
 // printStringListInline renders `<name> { "a" "b" … }` on one line, skipping an empty list.
-func printStringListInline(b *strings.Builder, indent, name string, items []*StringLit) {
+func printStringListInline(p *printer, indent, name string, items []*StringLit) {
 	if len(items) == 0 {
 		return
 	}
-	fmt.Fprintf(b, "%s%s {", indent, name)
+	fmt.Fprintf(p, "%s%s {", indent, name)
 	for _, s := range items {
-		fmt.Fprintf(b, " %s", strconv.Quote(stringLitOrEmpty(s)))
+		fmt.Fprintf(p, " %s", strconv.Quote(stringLitOrEmpty(s)))
 	}
-	b.WriteString(" }\n")
+	p.WriteString(" }\n")
 }
 
 // printSwitchMapBlock renders `<name> { <source> { <target> … } … }`, skipping an empty map.
-func printSwitchMapBlock(b *strings.Builder, indent, name string, entries []*SwitchMapEntry) {
+func printSwitchMapBlock(p *printer, indent, name string, entries []*SwitchMapEntry) {
 	if len(entries) == 0 {
 		return
 	}
-	fmt.Fprintf(b, "%s%s {\n", indent, name)
+	fmt.Fprintf(p, "%s%s {\n", indent, name)
 	inner := indent + "    "
 	for _, e := range entries {
 		if e == nil || e.Source == nil {
 			continue
 		}
-		fmt.Fprintf(b, "%s%s {", inner, identName(e.Source))
+		fmt.Fprintf(p, "%s%s {", inner, identName(e.Source))
 		for _, t := range e.Targets {
 			if t != nil {
-				fmt.Fprintf(b, " %s", identName(t))
+				fmt.Fprintf(p, " %s", identName(t))
 			}
 		}
-		b.WriteString(" }\n")
+		p.WriteString(" }\n")
 	}
-	fmt.Fprintf(b, "%s}\n", indent)
+	fmt.Fprintf(p, "%s}\n", indent)
 }
 
-func printBoolField(b *strings.Builder, indent, name string, v *bool) {
+func printBoolField(p *printer, indent, name string, v *bool) {
 	if v != nil {
-		fmt.Fprintf(b, "%s%s %t\n", indent, name, *v)
-	}
-}
-
-func printIntPtr(b *strings.Builder, indent, name string, v *int) {
-	if v != nil {
-		fmt.Fprintf(b, "%s%s %d\n", indent, name, *v)
+		fmt.Fprintf(p, "%s%s %t\n", indent, name, *v)
 	}
 }
 
-func printIdentField(b *strings.Builder, indent, name string, v *Ident) {
+func printIntPtr(p *printer, indent, name string, v *int) {
 	if v != nil {
-		fmt.Fprintf(b, "%s%s %s\n", indent, name, identName(v))
+		fmt.Fprintf(p, "%s%s %d\n", indent, name, *v)
+	}
+}
+
+func printIdentField(p *printer, indent, name string, v *Ident) {
+	if v != nil {
+		fmt.Fprintf(p, "%s%s %s\n", indent, name, identName(v))
 	}
 }
 
@@ -287,144 +319,171 @@ func grantPath(g *Grant) string {
 
 // printEnvironment renders `environment <Name> { overrides { agents { … } policies { … } } }`
 // (issue #440) with indent-parameterized sub-block helpers so the nested structure round-trips.
-func printEnvironment(b *strings.Builder, d *EnvironmentDecl) {
-	fmt.Fprintf(b, "environment %s {\n", identName(d.Name))
+func printEnvironment(p *printer, d *EnvironmentDecl) {
+	fmt.Fprintf(p, "environment %s {\n", identName(d.Name))
 	if ov := d.Overrides; ov != nil {
-		b.WriteString("    overrides {\n")
+		p.leadingBefore(ov.Pos.Line, "    ")
+		p.WriteString("    overrides {\n")
 		if len(ov.Agents) > 0 {
-			b.WriteString("        agents {\n")
+			p.WriteString("        agents {\n")
 			for _, a := range ov.Agents {
-				fmt.Fprintf(b, "            %s {\n", identName(a.Name))
+				p.leadingBefore(a.Pos.Line, "            ")
+				fmt.Fprintf(p, "            %s {\n", identName(a.Name))
 				if a.Model != nil {
-					fmt.Fprintf(b, "                model %s\n", a.Model.Raw)
+					p.leadingBefore(a.Model.Pos.Line, "                ")
+					p.field("                ", "model "+a.Model.Raw, a.Model.Pos.Line)
 				}
 				if a.Constraints != nil {
-					printConstraintsAt(b, "                ", a.Constraints)
+					p.leadingBefore(a.Constraints.Pos.Line, "                ")
+					printConstraintsAt(p, "                ", a.Constraints)
 				}
-				b.WriteString("            }\n")
+				p.blockTail(a.Pos.Line, "                ")
+				p.WriteString("            }\n")
 			}
-			b.WriteString("        }\n")
+			p.WriteString("        }\n")
 		}
 		if len(ov.Policies) > 0 {
-			b.WriteString("        policies {\n")
+			p.WriteString("        policies {\n")
 			for _, pol := range ov.Policies {
-				fmt.Fprintf(b, "            %s {\n", identName(pol.Name))
+				p.leadingBefore(pol.Pos.Line, "            ")
+				fmt.Fprintf(p, "            %s {\n", identName(pol.Name))
 				if pol.Execution != nil {
-					printExecutionAt(b, "                ", pol.Execution)
+					p.leadingBefore(pol.Execution.Pos.Line, "                ")
+					printExecutionAt(p, "                ", pol.Execution)
 				}
 				if pol.Approvals != nil {
-					printApprovalsAt(b, "                ", pol.Approvals)
+					p.leadingBefore(pol.Approvals.Pos.Line, "                ")
+					printApprovalsAt(p, "                ", pol.Approvals)
 				}
-				b.WriteString("            }\n")
+				p.blockTail(pol.Pos.Line, "                ")
+				p.WriteString("            }\n")
 			}
-			b.WriteString("        }\n")
+			p.WriteString("        }\n")
 		}
-		b.WriteString("    }\n")
+		p.blockTail(ov.Pos.Line, "        ")
+		p.WriteString("    }\n")
 	}
-	b.WriteString("}\n")
+	p.blockTail(d.Pos.Line, "    ")
+	p.WriteString("}\n")
 }
 
 // printProvider renders `provider <alias> { type … apiKeyFrom "…" workspaceIdFrom "…" }` (issue #440).
-func printProvider(b *strings.Builder, d *ProviderDecl) {
-	fmt.Fprintf(b, "provider %s {\n", identName(d.Name))
+func printProvider(p *printer, d *ProviderDecl) {
+	fmt.Fprintf(p, "provider %s {\n", identName(d.Name))
 	if d.Type != nil {
-		fmt.Fprintf(b, "    type %s\n", identName(d.Type))
+		p.leadingBefore(d.Type.Pos.Line, "    ")
+		p.field("    ", "type "+identName(d.Type), d.Type.Pos.Line)
 	}
-	printStringLitField(b, "    ", "apiKeyFrom", d.APIKeyFrom)
-	printStringLitField(b, "    ", "workspaceIdFrom", d.WorkspaceIDFrom)
-	b.WriteString("}\n")
+	if d.APIKeyFrom != nil {
+		p.leadingBefore(d.APIKeyFrom.Pos.Line, "    ")
+	}
+	printStringLitField(p, "    ", "apiKeyFrom", d.APIKeyFrom)
+	if d.WorkspaceIDFrom != nil {
+		p.leadingBefore(d.WorkspaceIDFrom.Pos.Line, "    ")
+	}
+	printStringLitField(p, "    ", "workspaceIdFrom", d.WorkspaceIDFrom)
+	p.blockTail(d.Pos.Line, "    ")
+	p.WriteString("}\n")
 }
 
 // printLimitsBlockAt renders a `limits { … }` block at the given indent (fields at indent+4), shared
 // by the per-tool override and the top-level project baseline (issue #440).
-func printLimitsBlockAt(b *strings.Builder, indent string, lim *ToolLimitsBlock) {
+func printLimitsBlockAt(p *printer, indent string, lim *ToolLimitsBlock) {
 	inner := indent + "    "
-	fmt.Fprintf(b, "%slimits {\n", indent)
-	printIntPtr(b, inner, "maxToolInputBytes", lim.MaxToolInputBytes)
-	printIntPtr(b, inner, "maxToolOutputBytes", lim.MaxToolOutputBytes)
-	printIntPtr(b, inner, "maxCheckpointBytes", lim.MaxCheckpointBytes)
-	printIntPtr(b, inner, "maxStateBytes", lim.MaxStateBytes)
-	printIntPtr(b, inner, "maxWorkflowNesting", lim.MaxWorkflowNesting)
-	printIntPtr(b, inner, "maxLoopIterations", lim.MaxLoopIterations)
-	printIdentField(b, inner, "toolInputExceedPolicy", lim.ToolInputExceedPolicy)
-	printIdentField(b, inner, "toolOutputExceedPolicy", lim.ToolOutputExceedPolicy)
-	printIdentField(b, inner, "checkpointExceedPolicy", lim.CheckpointExceedPolicy)
-	fmt.Fprintf(b, "%s}\n", indent)
+	fmt.Fprintf(p, "%slimits {\n", indent)
+	printIntPtr(p, inner, "maxToolInputBytes", lim.MaxToolInputBytes)
+	printIntPtr(p, inner, "maxToolOutputBytes", lim.MaxToolOutputBytes)
+	printIntPtr(p, inner, "maxCheckpointBytes", lim.MaxCheckpointBytes)
+	printIntPtr(p, inner, "maxStateBytes", lim.MaxStateBytes)
+	printIntPtr(p, inner, "maxWorkflowNesting", lim.MaxWorkflowNesting)
+	printIntPtr(p, inner, "maxLoopIterations", lim.MaxLoopIterations)
+	printIdentField(p, inner, "toolInputExceedPolicy", lim.ToolInputExceedPolicy)
+	printIdentField(p, inner, "toolOutputExceedPolicy", lim.ToolOutputExceedPolicy)
+	printIdentField(p, inner, "checkpointExceedPolicy", lim.CheckpointExceedPolicy)
+	p.blockTail(lim.Pos.Line, inner)
+	fmt.Fprintf(p, "%s}\n", indent)
 }
 
 // printLimitsDecl renders the top-level singleton `limits { … }` declaration (issue #440, ADR 007).
-func printLimitsDecl(b *strings.Builder, d *LimitsDecl) {
+func printLimitsDecl(p *printer, d *LimitsDecl) {
 	if d.Block == nil {
-		b.WriteString("limits {\n}\n")
+		p.WriteString("limits {\n}\n")
 		return
 	}
-	printLimitsBlockAt(b, "", d.Block)
+	printLimitsBlockAt(p, "", d.Block)
 }
 
 // printDefaults renders the singleton `defaults { policy … model … runtime … }` block (issue #440).
 // Fields absent from the AST are omitted, so an empty block prints as `defaults {\n}`.
-func printDefaults(b *strings.Builder, d *DefaultsDecl) {
-	b.WriteString("defaults {\n")
+func printDefaults(p *printer, d *DefaultsDecl) {
+	p.WriteString("defaults {\n")
 	if d.Policy != nil {
-		fmt.Fprintf(b, "    policy %s\n", identName(d.Policy))
+		p.leadingBefore(d.Policy.Pos.Line, "    ")
+		p.field("    ", "policy "+identName(d.Policy), d.Policy.Pos.Line)
 	}
 	if d.Model != nil {
-		fmt.Fprintf(b, "    model %s/%s\n", d.Model.Provider, d.Model.Name)
+		p.leadingBefore(d.Model.Pos.Line, "    ")
+		p.field("    ", fmt.Sprintf("model %s/%s", d.Model.Provider, d.Model.Name), d.Model.Pos.Line)
 	}
 	if d.Runtime != nil {
-		fmt.Fprintf(b, "    runtime %s\n", identName(d.Runtime))
+		p.leadingBefore(d.Runtime.Pos.Line, "    ")
+		p.field("    ", "runtime "+identName(d.Runtime), d.Runtime.Pos.Line)
 	}
-	b.WriteString("}\n")
+	p.blockTail(d.Pos.Line, "    ")
+	p.WriteString("}\n")
 }
 
 // printConstraintsAt renders a `constraints { … }` block at the given indent (fields at indent+4).
-func printConstraintsAt(b *strings.Builder, indent string, c *Constraints) {
+func printConstraintsAt(p *printer, indent string, c *Constraints) {
 	inner := indent + "    "
-	fmt.Fprintf(b, "%sconstraints {\n", indent)
+	fmt.Fprintf(p, "%sconstraints {\n", indent)
 	if c.MaxIterations != nil {
-		fmt.Fprintf(b, "%smaxIterations %d\n", inner, *c.MaxIterations)
+		fmt.Fprintf(p, "%smaxIterations %d\n", inner, *c.MaxIterations)
 	}
 	if c.MaxTokens != nil {
-		fmt.Fprintf(b, "%smaxTokens %d\n", inner, *c.MaxTokens)
+		fmt.Fprintf(p, "%smaxTokens %d\n", inner, *c.MaxTokens)
 	}
 	if c.TimeoutSeconds != nil {
-		fmt.Fprintf(b, "%stimeoutSeconds %d\n", inner, *c.TimeoutSeconds)
+		fmt.Fprintf(p, "%stimeoutSeconds %d\n", inner, *c.TimeoutSeconds)
 	}
 	if c.Temperature != nil {
-		fmt.Fprintf(b, "%stemperature %s\n", inner, strconv.FormatFloat(*c.Temperature, 'g', -1, 64))
+		fmt.Fprintf(p, "%stemperature %s\n", inner, strconv.FormatFloat(*c.Temperature, 'g', -1, 64))
 	}
 	if c.RequireStructuredOutput != nil {
-		fmt.Fprintf(b, "%srequireStructuredOutput %s\n", inner, strconv.FormatBool(*c.RequireStructuredOutput))
+		fmt.Fprintf(p, "%srequireStructuredOutput %s\n", inner, strconv.FormatBool(*c.RequireStructuredOutput))
 	}
-	fmt.Fprintf(b, "%s}\n", indent)
+	p.blockTail(c.Pos.Line, inner)
+	fmt.Fprintf(p, "%s}\n", indent)
 }
 
 // printExecutionAt renders an `execution { … }` block at the given indent.
-func printExecutionAt(b *strings.Builder, indent string, e *PolicyExecutionBlock) {
+func printExecutionAt(p *printer, indent string, e *PolicyExecutionBlock) {
 	inner := indent + "    "
-	fmt.Fprintf(b, "%sexecution {\n", indent)
+	fmt.Fprintf(p, "%sexecution {\n", indent)
 	if e.MaxTotalCostUsd != nil {
-		fmt.Fprintf(b, "%smaxTotalCostUsd %s\n", inner, strconv.FormatFloat(*e.MaxTotalCostUsd, 'f', -1, 64))
+		fmt.Fprintf(p, "%smaxTotalCostUsd %s\n", inner, strconv.FormatFloat(*e.MaxTotalCostUsd, 'f', -1, 64))
 	}
 	if e.MaxWallClockSeconds != nil {
-		fmt.Fprintf(b, "%smaxWallClockSeconds %d\n", inner, *e.MaxWallClockSeconds)
+		fmt.Fprintf(p, "%smaxWallClockSeconds %d\n", inner, *e.MaxWallClockSeconds)
 	}
-	printBoolField(b, inner, "requireStructuredOutput", e.RequireStructuredOutput)
-	fmt.Fprintf(b, "%s}\n", indent)
+	printBoolField(p, inner, "requireStructuredOutput", e.RequireStructuredOutput)
+	p.blockTail(e.Pos.Line, inner)
+	fmt.Fprintf(p, "%s}\n", indent)
 }
 
 // printApprovalsAt renders an `approvals { … }` block at the given indent.
-func printApprovalsAt(b *strings.Builder, indent string, a *PolicyApprovalsBlock) {
+func printApprovalsAt(p *printer, indent string, a *PolicyApprovalsBlock) {
 	inner := indent + "    "
-	fmt.Fprintf(b, "%sapprovals {\n", indent)
+	fmt.Fprintf(p, "%sapprovals {\n", indent)
 	if len(a.RequiredFor) > 0 {
-		fmt.Fprintf(b, "%srequiredFor {\n", inner)
+		fmt.Fprintf(p, "%srequiredFor {\n", inner)
 		for _, g := range a.RequiredFor {
-			fmt.Fprintf(b, "%s    %s\n", inner, grantPath(g))
+			fmt.Fprintf(p, "%s    %s\n", inner, grantPath(g))
 		}
-		fmt.Fprintf(b, "%s}\n", inner)
+		fmt.Fprintf(p, "%s}\n", inner)
 	}
-	printBoolField(b, inner, "requireAllTools", a.RequireAllTools)
-	printBoolField(b, inner, "permissive", a.Permissive)
-	fmt.Fprintf(b, "%s}\n", indent)
+	printBoolField(p, inner, "requireAllTools", a.RequireAllTools)
+	printBoolField(p, inner, "permissive", a.Permissive)
+	p.blockTail(a.Pos.Line, inner)
+	fmt.Fprintf(p, "%s}\n", indent)
 }

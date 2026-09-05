@@ -119,6 +119,49 @@ func TestFmt_formatsAgentSources(t *testing.T) {
 	}
 }
 
+// TestFmt_preservesComments is the regression for issue #509: fmt must not delete // comments. Both
+// standalone (own-line) and trailing (inline) comments survive a format, and re-running --check is
+// clean (idempotent).
+func TestFmt_preservesComments(t *testing.T) {
+	root := t.TempDir()
+	src := "// entry workflow\nworkflow hello(input: any) {\n    return input // dispatch\n}\n"
+	agentPath := filepath.Join(root, "main.agent")
+	if err := os.WriteFile(agentPath, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ResetGlobalsForTest()
+	cmd := NewRootCmd()
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	cmd.SetArgs([]string{"fmt", "--project", root})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("fmt: %v", err)
+	}
+
+	got, err := os.ReadFile(agentPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := string(got)
+	if !strings.Contains(out, "// entry workflow") {
+		t.Fatalf("standalone comment deleted:\n%s", out)
+	}
+	if !strings.Contains(out, "return input // dispatch") {
+		t.Fatalf("trailing comment deleted:\n%s", out)
+	}
+
+	// Idempotent: the formatted file passes --check.
+	ResetGlobalsForTest()
+	cmd = NewRootCmd()
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	cmd.SetArgs([]string{"fmt", "--check", "--project", root})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("formatted file with comments must pass --check, got: %v", err)
+	}
+}
+
 // TestFmt_agentOnlyProjectFormats is the regression for an .agent-only project (no project.yaml —
 // the normal shape under ADR 007): fmt must format the .agent sources, not fail with
 // "no project.yaml or project.yml".

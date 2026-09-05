@@ -56,7 +56,12 @@ The reference implementation is [`internal/lang`](../internal/lang):
 
 - **Whitespace and newlines** are insignificant; they only separate tokens. The grammar
   is not newline-terminated — each construct has a deterministic shape.
-- **Comments** run from `//` to the end of the line.
+- **Comments** run from `//` to the end of the line. `terfyn fmt` preserves them (issue #509):
+  an own-line comment stays glued to the declaration/field it precedes, and a trailing inline
+  comment stays on its line; only whitespace and layout are normalized. (A trailing comment on an
+  inner scalar field of a fixed block — `constraints`/`safety`/`execution`, whose fields carry no
+  source position — degrades to an own-line comment at that block's end rather than staying inline;
+  it never leaks out of its block.)
 - **Identifiers** match `[A-Za-z_][A-Za-z0-9_-]*`. A hyphen is legal after the first
   character (the language has no arithmetic, so `-` is never an operator). This lets
   DNS-style resource references (`guarded-writes`) and model name segments (`gpt-5`) be

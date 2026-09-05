@@ -17,6 +17,13 @@ type Node interface {
 type File struct {
 	Pos   Pos
 	Decls []Decl
+	// Comments are the // line comments recovered by the lexer in source order, so the
+	// formatter can round-trip them (issue #509). They are not part of the resource model.
+	Comments []Comment
+	// cidx attaches each comment to a print anchor by source position; built by Parse (which has the
+	// source), consumed by Print. nil on an AST built without source (e.g. raise/migrate) — then Print
+	// emits no comments, unchanged.
+	cidx *commentIndex
 }
 
 func (f *File) Position() Pos { return f.Pos }
@@ -56,6 +63,7 @@ type AgentDecl struct {
 	InstructionsFile *InstructionsFile
 	Constraints      *Constraints // constraints { maxIterations ... } (lowers to AgentSpec.Constraints)
 	Grants           []*Grant     // grants { tool.<name>.<operation> ... }
+	GrantsPos        Pos          // position of the `grants` keyword (formatter comment anchoring, #509)
 	Input            *TypeRef     // input <Type>
 	Output           *TypeRef     // output <Type>
 }
